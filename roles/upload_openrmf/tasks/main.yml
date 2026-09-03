@@ -1,0 +1,100 @@
+---
+# tasks file for upload_openrmf
+- name: Get JWT Token from RMF server
+  ansible.builtin.uri:
+    url: "{{ auth_server_fqdn }}/realms/{{ openrmf_keycloak_realm }}/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: "{{ openrmf_keycloak_realm }}"
+      grant_type: "password"
+      username: "{{ openrmf_username }}"
+      password: "{{ openrmf_password }}"
+  register: auth_response
+  delegate_to: localhost
+
+- name: Set access_token fact
+  ansible.builtin.set_fact:
+    access_token: "{{ auth_response.json.access_token }}"
+
+- name: Fetch all System Packages from OpenRMF
+  ansible.builtin.uri:
+    url: "{{ openrmf_server }}/api/read/artifact/systems"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ access_token }}"
+      Accept: "application/json"
+  register: openrmf_systems_response
+  delegate_to: localhost
+
+- name: Construct System Title to ID Map
+  ansible.builtin.set_fact:
+    system_id_map: "{{ openrmf_systems_response.json | items2dict(key_name='title', value_name='internalIdString') }}"
+
+- name: Create System Package in OpenRMF if missing
+  ansible.builtin.uri:
+    url: "{{ openrmf_server }}/api/read/save/system/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ access_token }}"
+      #Content-Type: "application/json"
+    body_format: form-urlencoded
+    #body_format: json
+    body:
+      title: "{{ inventory_hostname }}"
+      description: "Automated System Package created via Ansible for {{ inventory_hostname }}"
+    status_code: [200, 201]
+  register: create_system_response
+  when: inventory_hostname not in system_id_map
+  delegate_to: localhost
+
+- name: Update System ID map with newly created system
+  ansible.builtin.set_fact:
+    system_id_map: "{{ system_id_map | combine({inventory_hostname: create_system_response.json.internalIdString}) }}"
+  when:
+    - inventory_hostname not in system_id_map
+    - create_system_response.json is defined
+    - create_system_response.json.internalIdString is defined
+  delegate_to: localhost
+
+- name: Find checklists previously fetched to the EE
+  ansible.builtin.find:
+    paths: "{{ ee_temp_dir }}{{ inventory_hostname }}"
+    patterns: "*.ckl"
+    recurse: false
+  register: ee_checklists
+  delegate_to: localhost
+
+- name: Push CKLs to OpenRMF Server
+  ansible.builtin.command: >
+    curl -s -X POST '{{ openrmf_server }}/api/read/upload'
+    -H "Authorization: Bearer {{ access_token }}" 
+    -F "checklistFiles=@{{ ee_temp_dir }}{{ inventory_hostname }}/{{ item.path | basename }}" 
+    -F "systemGroupId={{ system_id_map[inventory_hostname] }}"
+  register: upload_result
+  loop: "{{ ee_checklists.files }}"
+  delegate_to: localhost
+  when: inventory_hostname in system_id_map
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+- name: Upload Status
+  ansible.builtin.debug:
+    msg: "Upload successful for {{ item.item.path | basename }}"
+  loop: "{{ upload_result.results }}"
+  when: 
+    - item.rc is defined
+    - item.rc == 0
+  loop_control:
+    label: "{{ item.item.path | basename }}"
+  delegate_to: localhost
+
+- name: Warn if OpenRMF System Package creation or mapping failed
+  ansible.builtin.debug:
+    msg: "WARNING: Unable to map or create OpenRMF System Package for host '{{ inventory_hostname }}'. Skipping upload."
+  loop: "{{ ee_checklists.files }}"
+  when: inventory_hostname not in system_id_map
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+...

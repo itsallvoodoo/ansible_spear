@@ -1,0 +1,166 @@
+---
+# tasks file for evaluate_stig_linux
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Gather minimal facts for OS distribution and version for dmidecode
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - 'distribution'
+    filter:
+      - 'ansible_distribution*'
+
+- name: Create a temporary directory on the remote host
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy Evaluate-STIG.zip to the remote host
+  ansible.builtin.copy:
+    src: Evaluate-STIG.zip
+    dest: "{{ scanned_temp_dir }}/Evaluate-STIG.zip"
+    mode: '0755'
+
+- name: Copy powershell.tar.gz to the remote host
+  ansible.builtin.copy:
+    src: powershell.tar.gz
+    dest: "{{ scanned_temp_dir }}/powershell.tar.gz"
+    mode: '0755'
+
+- name: Install required packages
+  ansible.builtin.package:
+    name:
+      - unzip
+      - libicu
+      - bc
+      - bind-utils
+      - dmidecode
+      - hostname
+      - net-tools
+    state: present
+
+- name: Unarchive the Evaluate-STIG.zip file
+  ansible.builtin.unarchive:
+    src: "{{ scanned_temp_dir }}/Evaluate-STIG.zip"
+    dest: "{{ scanned_temp_dir }}"
+    remote_src: true
+
+- name: Create the powershell directory
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}/Evaluate-STIG/powershell"
+    state: directory
+    mode: '0755'
+
+- name: Pre-extract PowerShell to bypass "Just-in-Time" execution blocks
+  ansible.builtin.unarchive:
+    src: "{{ scanned_temp_dir }}/powershell.tar.gz"
+    dest: "{{ scanned_temp_dir }}/Evaluate-STIG/powershell/"
+    remote_src: true
+
+- name: Add DMIDecode mock variables
+  ansible.builtin.copy:
+    dest: "{{ scanned_temp_dir }}/Evaluate-STIG/powershell/Microsoft.PowerShell_profile.ps1"
+    content: |
+      Function dmidecode {
+        return @"
+      System Information
+        Manufacturer: Red Hat
+        Product Name: RHEL {{ ansible_facts['distribution_major_version'] }} Server
+        Serial Number: Unknown
+      BIOS Information
+        Version: 1.0.0
+      "@
+      }
+  when:
+    - ansible_facts['distribution'] == "RedHat"
+
+- name: Apply SELinux and Permissions to extracted files
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}/Evaluate-STIG/powershell/libhostfxr.so"
+    mode: '0755'
+    setype: bin_t # Or textrel_shlib_t ???
+
+- name: Add fapolicyd rule for Evaluate-STIG
+  ansible.builtin.copy:
+    dest: /etc/fapolicyd/rules.d/72-openrmf-scanner.rules
+    content: |
+      # Allow execution of the Evaluate-STIG directory
+      allow perm=any all : dir={{ scanned_temp_dir }}
+    mode: '0644'
+  register: fapolicyd_rule
+  when: "'fapolicyd.service' in services"
+
+- name: Add fapolicyd rule for the extracted powershell folder
+  ansible.builtin.copy:
+    dest: /etc/fapolicyd/rules.d/73-powershell-fix.rules
+    content: |
+      allow perm=any all : dir={{ scanned_temp_dir }}/Evaluate-STIG/powershell/
+    mode: '0644'
+  when: "'fapolicyd.service' in services"
+
+- name: Register Evaluate-STIG binaries in the fapolicyd trust database
+  ansible.builtin.shell: |
+    fapolicyd-cli --file add {{ item }}
+  loop:
+    - "{{ scanned_temp_dir }}/Evaluate-STIG/powershell/pwsh"
+    - "{{ scanned_temp_dir }}/Evaluate-STIG/powershell/libhostfxr.so"
+  become: true
+  when: "'fapolicyd.service' in services"
+
+- name: Update fapolicyd trust database and restart
+  ansible.builtin.shell: |
+    fagenrules --load
+    systemctl restart fapolicyd
+  when:
+    - "'fapolicyd.service' in services"
+    - services['fapolicyd.service'].state == 'running'
+
+- name: Create the results directory
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}/Evaluate-STIG/Results"
+    state: directory
+    mode: '0755'
+
+- name: Run the Evaluate-STIG bash script and background
+  ansible.builtin.shell: |
+    ./Evaluate-STIG_Bash.sh --Output CKL,CKLB,XCCDF --OutputPath {{ scanned_temp_dir }}/Evaluate-STIG/Results --PSPath {{ scanned_temp_dir }}/Evaluate-STIG/powershell
+  args:
+    chdir: "{{ scanned_temp_dir }}/Evaluate-STIG"
+  async: 2700 #45 minutes
+  poll: 0
+  register: task_sleep
+
+- name: Check on bash script to see if it has completed
+  ansible.builtin.async_status:
+    jid: "{{ task_sleep.ansible_job_id }}"
+  register: job_result
+  until: job_result.finished | bool
+  retries: 44
+  delay: 60
+
+- name: Find all checklist files in Results directories
+  ansible.builtin.find:
+    paths: "{{ scanned_temp_dir }}/Evaluate-STIG/Results"
+    patterns: "*"
+    recurse: true
+    file_type: file
+  register: checklist_files
+
+- name: Copy each checklist file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir }}{{ inventory_hostname }}/{{ item.path | basename }}"
+    flat: true
+  loop: "{{ checklist_files.files }}"
+  when: "'Checklist' in item.path"
+
+- name: Clean up the temporary directory on the remote host
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}"
+    state: absent
+
+...

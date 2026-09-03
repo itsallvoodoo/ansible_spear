@@ -1,0 +1,18 @@
+---
+collections:
+  - name: cisco.ios
+  - name: ansible.windows
+    version: ">=3.6.0"
+  - name: community.general
+  - name: community.windows
+    version: ">=3.1.0"
+  - name: microsoft.ad
+    version: ">=1.4.0"
+  - name: chocolatey.chocolatey
+    version: ">=1.5.1"
+  - name: ansible.posix
+    version: ">=2.2.2"
+  - name: containers.podman
+    version: ">=1.20.2"
+  - name: infra.aap_configuration
+

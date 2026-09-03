@@ -1,0 +1,765 @@
+---
+# tasks file for stig_server_deploy
+- name: Determine dynamic server IP address
+  ansible.builtin.set_fact:
+    app_server_ip: "{{ ansible_host | default(ansible_default_ipv4.address) }}"
+
+- name: Set dynamic service URL endpoints
+  ansible.builtin.set_fact:
+    auth_server_fqdn: "http://{{ app_server_ip }}:{{ keycloak_host_port }}"
+    stigman_server_url: "http://{{ app_server_ip }}:{{ stigman_host_port }}"
+    openrmf_server: "http://{{ app_server_ip }}:{{ openrmf_host_port }}"
+  when: not (use_fqdn | bool)
+
+# ------------------------------------------------------------------
+# Setup service account
+# ------------------------------------------------------------------
+- name: Create stig-svc-account service user
+  ansible.builtin.user:
+    name: "{{ server_svc_account }}"
+    comment: "Service account for rootless Podman compliance containers"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: "Enable loginctl lingering for {{ server_svc_account }}"
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ server_svc_account }}"
+    creates: "/var/lib/systemd/linger/{{ server_svc_account }}"
+
+- name: Ensure Ansible remote_tmp directory exists for service account
+  ansible.builtin.file:
+    path: "/home/{{ server_svc_account }}/.ansible/tmp"
+    state: directory
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0700'
+
+- name: Ensure subuid/subgid allocations exist for service account
+  ansible.builtin.lineinfile:
+    path: "/etc/{{ item }}"
+    line: "{{ server_svc_account }}:100000:65536"
+    regexp: "^{{ server_svc_account }}:"
+    state: present
+  loop:
+    - subuid
+    - subgid
+
+- name: Get UID of service account
+  ansible.builtin.command: "id -u {{ server_svc_account }}"
+  register: stig_svc_uid
+  changed_when: false
+
+- name: Ensure user runtime directory exists
+  ansible.builtin.file:
+    path: "/run/user/{{ stig_svc_uid.stdout }}"
+    state: directory
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0700'
+
+- name: "Retrieve UID for {{ server_svc_account }}"
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ server_svc_account }}"
+
+- name: Set facts for rootless environment
+  ansible.builtin.set_fact:
+    stig_uid: "{{ ansible_facts.getent_passwd[server_svc_account][1] }}"
+
+- name: Create user systemd directory for rootless services
+  ansible.builtin.file:
+    path: "/home/{{ server_svc_account }}/.config/systemd/user"
+    state: directory
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0755'
+  become: true
+
+# ------------------------------------------------------------------
+# System Dependencies & Networking
+# ------------------------------------------------------------------
+- name: Install Podman, npm, and other dependencies
+  ansible.builtin.dnf:
+    name:
+      - podman
+      - python3-pip
+      - nodejs
+      - npm
+      - firewalld
+      - python3-firewall
+      - unzip
+      - tar
+    state: present
+
+- name: Ensure firewalld service is started and enabled
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+
+- name: Install podman-compose system-wide via pip
+  ansible.builtin.pip:
+    name: podman-compose
+    executable: pip3
+    state: present
+
+- name: Symlink podman-compose into /usr/bin for global provider lookup
+  ansible.builtin.file:
+    src: /usr/local/bin/podman-compose
+    dest: /usr/bin/podman-compose
+    state: link
+    force: true
+
+- name: Open firewall ports for OpenRMF, STIG Manager, and Keycloak
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - "{{ stigman_host_port }}/tcp"  # STIG Manager UI
+    - "{{ openrmf_host_port }}/tcp" # OpenRMF UI
+    - "{{ keycloak_host_port }}/tcp" # Keycloak Admin/Login UI
+
+# ------------------------------------------------------------------
+# Host Directories, SQL Initialization, & SELinux Contexts
+# ------------------------------------------------------------------
+- name: Create host directories for MySQL and Keycloak
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0755'
+  loop:
+    - "{{ mysql_data_dir }}"
+    - "{{ mysql_init_dir }}"
+    - "{{ keycloak_import_dir }}"
+
+- name: Ensure watched directory exists for incoming CKL/XML scan files
+  ansible.builtin.file:
+    path: "{{ nfs_upload_folder }}"
+    state: directory
+    owner: "{{ nfs_user }}"
+    group: "{{ nfs_user }}"
+    mode: '0777'
+
+- name: Copy exported stigman Keycloak realm JSON to target host
+  ansible.builtin.template:
+    src: "{{ stigman_realm_export_template }}"
+    dest: "{{ keycloak_import_dir }}/stigman-realm-export.json"
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0644'
+
+- name: Copy exported openrmf Keycloak realm JSON to target host
+  ansible.builtin.template:
+    src: "{{ openrmf_realm_export_template }}"
+    dest: "{{ keycloak_import_dir }}/openrmf-realm-export.json"
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0644'
+
+- name: Generate MySQL database initialization SQL script
+  ansible.builtin.copy:
+    dest: "{{ mysql_init_dir }}/01-init-databases.sql"
+    mode: '0644'
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    content: |
+      CREATE DATABASE IF NOT EXISTS stigman;
+      CREATE USER IF NOT EXISTS 'stigman'@'%' IDENTIFIED BY '{{ stigman_db_password }}';
+      GRANT ALL PRIVILEGES ON stigman.* TO 'stigman'@'%';
+
+      CREATE DATABASE IF NOT EXISTS keycloak;
+      CREATE USER IF NOT EXISTS 'keycloak'@'%' IDENTIFIED BY '{{ keycloak_db_password }}';
+      GRANT ALL PRIVILEGES ON keycloak.* TO 'keycloak'@'%';
+
+      FLUSH PRIVILEGES;
+
+- name: Set SELinux file context for container volume mounts
+  community.general.sefcontext:
+    target: "{{ base_dir }}(/.*)?"
+    setype: container_file_t
+    state: present
+
+- name: Apply SELinux contexts using restorecon
+  ansible.builtin.command:
+    cmd: "restorecon -R {{ base_dir }}"
+  changed_when: false
+
+# ------------------------------------------------------------------
+# Deploy Containers inside a Single Podman Pod
+# ------------------------------------------------------------------
+- name: Ensure Python Podman bindings exist for Ansible
+  ansible.builtin.pip:
+    name: podman
+    state: present
+
+- name: Create Podman Pod for entire stack
+  containers.podman.podman_pod:
+    name: stigman-pod
+    state: created
+    ports:
+      - "{{ stigman_host_port }}:54000" # STIG Manager
+      - "{{ keycloak_host_port }}:8080" # Keycloak
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+
+- name: Check if pod systemd service exists
+  ansible.builtin.stat:
+    path: "/home/{{ server_svc_account }}/.config/systemd/user/pod-stigman-pod.service"
+  register: pod_service_file
+  become: true
+  become_user: "{{ server_svc_account }}"
+
+- name: Deploy MySQL 8.4 Container
+  containers.podman.podman_container:
+    name: stigman-db
+    pod: stigman-pod
+    image: "{{ mysql_image }}"
+    state: started
+    restart_policy: always
+    env:
+      MYSQL_ROOT_PASSWORD: "{{ mysql_root_password }}"
+    volume:
+      - "{{ mysql_data_dir }}:/var/lib/mysql:Z"
+      - "{{ mysql_init_dir }}:/docker-entrypoint-initdb.d:Z"
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+
+- name: Deploy Keycloak OIDC Container with Auto-Realm Import
+  containers.podman.podman_container:
+    name: keycloak-app
+    pod: stigman-pod
+    image: "{{ keycloak_image }}"
+    state: started
+    restart_policy: always
+    command: "start-dev --import-realm"
+    env:
+      KEYCLOAK_ADMIN: "{{ keycloak_admin_user }}"
+      KEYCLOAK_ADMIN_PASSWORD: "{{ keycloak_admin_password }}"
+      KC_DB: "mysql"
+      KC_DB_URL_HOST: "127.0.0.1"
+      KC_DB_URL_PORT: "3306"
+      KC_DB_URL_DATABASE: "keycloak"
+      KC_DB_USERNAME: "keycloak"
+      KC_DB_PASSWORD: "{{ keycloak_db_password }}"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: "xforwarded"
+      KC_HOSTNAME_STRICT: "false"
+    volume:
+      - "{{ keycloak_import_dir }}:/opt/keycloak/data/import:Z"
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+
+- name: Deploy STIG Manager Application Container
+  containers.podman.podman_container:
+    name: stigman-app
+    pod: stigman-pod
+    image: "{{ stigman_image }}"
+    state: started
+    restart_policy: always
+    env:
+      STIGMAN_DB_HOST: "127.0.0.1"
+      STIGMAN_DB_PORT: "3306"
+      STIGMAN_DB_SCHEMA: "{{ stigman_keycloak_realm }}"
+      STIGMAN_DB_USER: "{{ stigman_keycloak_realm }}"
+      STIGMAN_DB_PASSWORD: "{{ stigman_db_password }}"
+      STIGMAN_OIDC_PROVIDER: "http://127.0.0.1:8080/realms/{{ stigman_keycloak_realm }}"
+      STIGMAN_CLIENT_OIDC_PROVIDER: "{{ auth_server_fqdn }}/realms/{{ stigman_keycloak_realm }}"
+      STIGMAN_CLIENT_OIDC_CLIENT_ID: "{{ stigman_keycloak_client_id }}"
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+
+# ------------------------------------------------------------------
+# Enable Boot Persistence via Systemd
+# ------------------------------------------------------------------
+- name: Generate systemd service for Podman Pod
+  containers.podman.podman_generate_systemd:
+    name: stigman-pod
+    dest: "/home/{{ server_svc_account }}/.config/systemd/user"
+    new: true
+    restart_policy: always
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+  when: not pod_service_file.stat.exists
+
+- name: Stop running pod to hand control to systemd
+  containers.podman.podman_pod:
+    name: stigman-pod
+    state: stopped
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+  when: not pod_service_file.stat.exists
+
+- name: Reload user systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ stig_uid }}/bus"
+  when: not pod_service_file.stat.exists
+
+- name: Enable and start STIG Manager pod service
+  ansible.builtin.systemd:
+    name: pod-stigman-pod.service
+    enabled: true
+    state: started
+    scope: user
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_uid }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ stig_uid }}/bus"
+
+# ------------------------------------------------------------------
+# Create Users in Keycloak
+# ------------------------------------------------------------------
+
+- name: Wait until Keycloak API and stigman realm are ready
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ keycloak_host_port }}/realms/{{ stigman_keycloak_realm }}/.well-known/openid-configuration"
+    status_code: 200
+  register: keycloak_check
+  until: keycloak_check.status == 200
+  retries: 30
+  delay: 5
+
+- name: Ensure STIG Manager Admin User exists in Keycloak
+  community.general.keycloak_user:
+    auth_keycloak_url: "http://127.0.0.1:{{ keycloak_host_port }}"
+    auth_realm: "master"
+    auth_username: "{{ keycloak_admin_user }}"
+    auth_password: "{{ keycloak_admin_password }}"
+    realm: "{{ stigman_keycloak_realm }}"
+    username: "{{ stigman_username }}"
+    firstName: "{{ stigman_firstname }}"
+    lastName: "{{ stigman_lastname }}"
+    email: "{{ stigman_email }}"
+    enabled: true
+    credentials:
+      - type: password
+        value: "{{ stigman_password }}"
+        temporary: false
+    state: present
+
+- name: Ensure STIG Manager Watcher User exists in Keycloak
+  community.general.keycloak_user:
+    auth_keycloak_url: "http://127.0.0.1:{{ keycloak_host_port }}"
+    auth_realm: "master"
+    auth_username: "{{ keycloak_admin_user }}"
+    auth_password: "{{ keycloak_admin_password }}"
+    realm: "{{ stigman_keycloak_realm }}"
+    username: "{{ watcher_client_id }}"
+    firstName: "{{ watcher_client_id }}"
+    lastName: "{{ watcher_client_id }}"
+    email: "{{ watcher_client_email }}"
+    enabled: true
+    credentials:
+      - type: password
+        value: "{{ watcher_client_secret }}"
+        temporary: false
+    state: present
+
+- name: Ensure OpenRMF Admin User exists in Keycloak
+  community.general.keycloak_user:
+    auth_keycloak_url: "http://127.0.0.1:{{ keycloak_host_port }}"
+    auth_realm: "master"
+    auth_username: "{{ keycloak_admin_user }}"
+    auth_password: "{{ keycloak_admin_password }}"
+    realm: "{{ openrmf_keycloak_realm }}"
+    username: "{{ openrmf_username }}"
+    firstName: "{{ openrmf_firstname }}"
+    lastName: "{{ openrmf_lastname }}"
+    email: "{{ openrmf_email }}"
+    enabled: true
+    credentials:
+      - type: password
+        value: "{{ openrmf_password }}"
+        temporary: false
+    state: present
+
+- name: Assign Realm Roles to STIG Manager User
+  community.general.keycloak_user_rolemapping:
+    auth_keycloak_url: "http://127.0.0.1:{{ keycloak_host_port }}"
+    auth_realm: "master"
+    auth_username: "{{ keycloak_admin_user }}"
+    auth_password: "{{ keycloak_admin_password }}"
+    realm: "{{ stigman_keycloak_realm }}"
+    target_username: "{{ stigman_username }}"
+    roles:
+      - name: user
+      - name: admin
+      - name: create_collection
+    state: present
+
+- name: Assign Realm Roles to Watcher Service Account
+  community.general.keycloak_user_rolemapping:
+    auth_keycloak_url: "http://127.0.0.1:{{ keycloak_host_port }}"
+    auth_realm: "master"
+    auth_username: "{{ keycloak_admin_user }}"
+    auth_password: "{{ keycloak_admin_password }}"
+    realm: "{{ stigman_keycloak_realm }}"
+    target_username: "{{ watcher_client_id }}"
+    roles:
+      - name: user
+      - name: admin
+      - name: create_collection
+    state: present
+
+- name: Assign Realm Roles to OpenRMF User
+  community.general.keycloak_user_rolemapping:
+    auth_keycloak_url: "http://127.0.0.1:{{ keycloak_host_port }}"
+    auth_realm: "master"
+    auth_username: "{{ keycloak_admin_user }}"
+    auth_password: "{{ keycloak_admin_password }}"
+    realm: "{{ openrmf_keycloak_realm }}"
+    target_username: "{{ openrmf_username }}"
+    roles:
+      - name: Administrator
+      - name: Assessor
+      - name: Download
+      - name: Editor
+      - name: offline_access
+      - name: Reader
+    state: present
+
+# ------------------------------------------------------------------
+# Get Tokens & Trigger Watcher JIT User Creation
+# ------------------------------------------------------------------
+- name: Wait for STIG Manager OIDC connection to be ready
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ stigman_host_port }}/api/op/definition"
+    method: GET
+    status_code: 200
+  register: stigman_health
+  until: stigman_health.status == 200
+  retries: 30
+  delay: 10
+
+- name: Get Admin Bearer Token for STIG Manager API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ keycloak_host_port }}/realms/{{ stigman_keycloak_realm }}/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: "password"
+      client_id: "{{ stigman_keycloak_client_id }}"
+      username: "{{ stigman_username }}"
+      password: "{{ stigman_password }}"
+    status_code: 200
+  register: keycloak_token
+
+- name: Get Bearer Token for Watcher Service Account
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ keycloak_host_port }}/realms/{{ stigman_keycloak_realm }}/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: "client_credentials"
+      client_id: "{{ watcher_client_id }}"
+      client_secret: "{{ watcher_client_secret }}"
+    status_code: 200
+  register: watcher_token
+
+- name: Trigger JIT User Creation in STIG Manager for Watcher
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ stigman_host_port }}/api/stigs"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ watcher_token.json.access_token }}"
+    status_code: 200
+
+# ------------------------------------------------------------------
+# Fetch Users & Build Initial Grants Payload
+# ------------------------------------------------------------------
+- name: Fetch STIG Manager User Records
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ stigman_host_port }}/api/users"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    status_code: 200
+  register: stigman_users
+
+- name: Build Grants Payload for Collection Creation
+  ansible.builtin.set_fact:
+    collection_grants: "{{ raw_grants | from_json }}"
+  vars:
+    raw_grants: >-
+      {% set grants_list = [] %}
+      {% set target_usernames = [
+            stigman_username,
+            watcher_client_id,
+            'service-account-' ~ watcher_client_id,
+            'stigman-manager'
+          ] %}
+      {% for user in stigman_users.json %}
+      {%   if user.username in target_usernames %}
+      {%     set _ = grants_list.append({'userId': user.userId, 'roleId': 4}) %}
+      {%   endif %}
+      {% endfor %}
+      {{ grants_list | to_json }}
+
+# ------------------------------------------------------------------
+# Create Collection with Grants Included Atomically
+# ------------------------------------------------------------------
+- name: Fetch existing STIG Manager Collections (Elevated)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ stigman_host_port }}/api/collections?elevate=true"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    status_code: 200
+  register: existing_collections
+
+- name: Create STIG Manager Collection with Manager Grants
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ stigman_host_port }}/api/collections"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ collection_name }}"
+      description: "Initial collection created during automated deployment"
+      grants: "{{ collection_grants }}"
+    status_code: 201
+  when: collection_name not in (existing_collections.json | map(attribute='name') | list)
+
+- name: Fetch updated STIG Manager Collections list (Elevated)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ stigman_host_port }}/api/collections?elevate=true"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    status_code: 200
+  register: updated_collections
+
+- name: Set Collection ID fact
+  ansible.builtin.set_fact:
+    target_collection_id: >-
+      {{
+        (updated_collections.json
+          | selectattr('name', 'eq', collection_name)
+          | map(attribute='collectionId')
+          | list
+          | first)
+      }}
+
+# ------------------------------------------------------------------
+# Set up stigman watcher
+# ------------------------------------------------------------------
+- name: Install @nuwcdivnpt/stigman-watcher globally via NPM
+  ansible.builtin.npm:
+    name: "@nuwcdivnpt/stigman-watcher"
+    global: true
+    state: present
+
+- name: Deploy environment variable file for Watcher
+  ansible.builtin.copy:
+    dest: "/usr/local/lib/node_modules/@nuwcdivnpt/stigman-watcher/.env"
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      WATCHER_PATH={{ nfs_upload_folder }}
+      WATCHER_API_BASE={{ stigman_server_url }}/api
+      WATCHER_AUTHORITY={{ auth_server_fqdn }}/realms/{{ stigman_keycloak_realm }}
+      WATCHER_CLIENT_ID={{ watcher_client_id }}
+      WATCHER_CLIENT_SECRET={{ watcher_client_secret }}
+      WATCHER_COLLECTION={{ target_collection_id }}
+      WATCHER_MODE=scan
+      WATCHER_HISTORY_FILE=true
+      WATCHER_HISTORY_WRITE_INTERVAL=15000
+      WATCHER_SCAN_INTERVAL=60000
+      WATCHER_CREATE_OBJECTS=true
+
+
+- name: Create systemd unit file for STIGMan Watcher
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/stigman-watcher.service"
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=STIG Manager Directory Watcher Daemon
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/usr/local/lib/node_modules/@nuwcdivnpt/stigman-watcher
+      ExecStart=/usr/local/lib/node_modules/@nuwcdivnpt/stigman-watcher/index.js
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Enable and start STIGMan Watcher service
+  ansible.builtin.systemd:
+    name: stigman-watcher.service
+    enabled: true
+    daemon_reload: true
+    state: started
+
+# ------------------------------------------------------------------
+# Upload STIGs to STIGMAN Library
+# ------------------------------------------------------------------
+- name: Ensure clean temp import directory exists on target host
+  ansible.builtin.file:
+    path: /tmp/stigs_import
+    state: "{{ item }}"
+    mode: '0755'
+  loop:
+    - absent
+    - directory
+
+- name: Unarchive STIG ZIPs from AAP Runner to target host
+  ansible.builtin.unarchive:
+    src: "{{ item }}"
+    dest: /tmp/stigs_import/
+    remote_src: false
+  loop: "{{ query('ansible.builtin.fileglob', '*.zip') }}"
+  loop_control:
+    label: "{{ item | basename }}"
+
+- name: Find extracted XCCDF XML files
+  ansible.builtin.find:
+    paths: /tmp/stigs_import
+    patterns: "*.xml"
+    recurse: true
+  register: extracted_xmls
+
+- name: Import STIG Library XML Files into STIG Manager
+  ansible.builtin.command: >
+    curl -s -w "\nHTTP_STATUS:%{http_code}"
+    -X POST "http://127.0.0.1:{{ stigman_host_port }}/api/stigs?elevate=true&clobber=true"
+    -H "Authorization: Bearer {{ keycloak_token.json.access_token }}"
+    -F "importFile=@{{ item.path }}"
+  register: xml_upload_result
+  failed_when: >
+    'HTTP_STATUS:200' not in xml_upload_result.stdout and
+    'HTTP_STATUS:201' not in xml_upload_result.stdout
+  changed_when: >
+    'HTTP_STATUS:200' in xml_upload_result.stdout or
+    'HTTP_STATUS:201' in xml_upload_result.stdout
+  loop: "{{ extracted_xmls.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+- name: Clean up temp import directory
+  ansible.builtin.file:
+    path: /tmp/stigs_import
+    state: absent
+
+# ------------------------------------------------------------------
+# Stand up OpenRMF Application Deployment
+# ------------------------------------------------------------------
+- name: Ensure OpenRMF installation directory exists
+  ansible.builtin.file:
+    path: "{{ openrmf_install_dir }}"
+    state: directory
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0755'
+
+- name: Unarchive OpenRMF release archive to target host
+  ansible.builtin.unarchive:
+    src: "{{ openrmf_zip_file }}"
+    dest: "{{ openrmf_install_dir }}"
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    remote_src: false
+
+- name: Remap openrmf-web host port from 8080 to 9080 directly in docker-compose.yml
+  ansible.builtin.replace:
+    path: "{{ openrmf_install_dir }}/docker-compose.yml"
+    regexp: '8080:8080'
+    replace: '9080:8080'
+
+- name: Ensure auth.js volume mount is present in docker-compose.yml
+  ansible.builtin.lineinfile:
+    path: "{{ openrmf_install_dir }}/docker-compose.yml"
+    line: '      - ./auth.js:/usr/share/nginx/html/js/auth.js:z'
+    insertafter: '.*nginx\.conf.*'
+
+- name: Deploy OpenRMF .env configuration
+  ansible.builtin.copy:
+    dest: "{{ openrmf_install_dir }}/.env"
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0600'
+    content: |
+      JWTAUTHORITY={{ auth_server_fqdn }}/realms/{{ openrmf_keycloak_realm }}
+      JWTINTERNALAUTHORITY={{ auth_server_fqdn }}/
+      JWTCLIENT={{ openrmf_keycloak_realm }}
+      OPENRMF_HOST={{ openrmf_server }}
+
+- name: Deploy external Keycloak JS config (auth.js)
+  ansible.builtin.copy:
+    dest: "{{ openrmf_install_dir }}/auth.js"
+    owner: "{{ server_svc_account }}"
+    group: "{{ server_svc_account }}"
+    mode: '0644'
+    content: |
+      var keycloak = new Keycloak({
+        url: '{{ auth_server_fqdn }}',
+        realm: '{{ openrmf_keycloak_realm }}',
+        clientId: '{{ openrmf_keycloak_realm }}'
+      });
+
+- name: Convert compose scripts to use podman if applicable
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    regexp: 'docker compose'
+    replace: 'podman compose'
+  loop:
+    - "{{ openrmf_install_dir }}/start.sh"
+    - "{{ openrmf_install_dir }}/stop.sh"
+
+- name: Ensure OpenRMF execution scripts are executable
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: '0755'
+  loop:
+    - "{{ openrmf_install_dir }}/start.sh"
+    - "{{ openrmf_install_dir }}/stop.sh"
+
+- name: Launch OpenRMF stack as service account
+  ansible.builtin.command:
+    cmd: "systemd-run --user --scope ./start.sh"
+    chdir: "{{ openrmf_install_dir }}"
+  become: true
+  become_user: "{{ server_svc_account }}"
+  environment:
+    HOME: "/home/{{ server_svc_account }}"
+    LOGNAME: "{{ server_svc_account }}"
+    USER: "{{ server_svc_account }}"
+    PATH: "/usr/local/bin:/usr/bin:/bin:{{ ansible_facts.env.PATH }}"
+    XDG_RUNTIME_DIR: "/run/user/{{ stig_svc_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ stig_svc_uid.stdout }}/bus"
+  register: openrmf_start
+  changed_when: openrmf_start.rc == 0
+
+...

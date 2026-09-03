@@ -1,0 +1,23 @@
+---
+- name: Bootstrap AAP Environment with STIG Resources
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    controller_configs:
+      - controller_config/projects.yml
+      - controller_config/execution_environments.yml
+      - controller_config/job_templates.yml
+      - controller_config/inventories.yml
+
+  tasks:
+    - name: Load resource variables
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      loop: "{{ controller_configs }}"
+
+    - name: Apply Controller Resources
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.dispatch
+
+...

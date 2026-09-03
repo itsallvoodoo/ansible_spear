@@ -1,0 +1,10 @@
+---
+- name: Teardown STIG Manager & Keycloak Stack
+  hosts: "{{ server_fqdn | default('rmf.example.com') }}"
+
+  tasks:
+    - name: "---------- Playbook - Clean the STIG Server ----------"
+      ansible.builtin.include_role:
+        name: ../roles/stig_server_clean
+
+...

@@ -1,0 +1,76 @@
+---
+# General logic variables
+limit: all
+linux_zip: "true"
+windows_zip: "true"
+cisco_zip: "true"
+use_fqdn: "false"
+
+# App Server Variables
+ansible_service_account: "ansible"
+server_fqdn: "rmf.example.com"
+base_dir: "/var/lib/stigman_stack"
+mysql_data_dir: "/var/lib/stigman_stack/mysql"
+mysql_init_dir: "/var/lib/stigman_stack/init"
+keycloak_import_dir: "/var/lib/stigman_stack/keycloak/import"
+stigman_realm_export_template: "stigman-realm-export.json.j2"
+openrmf_realm_export_template: "openrmf-realm-export.json.j2"
+server_svc_account: "stig-svc-account"
+
+# General Keycloak Variables
+auth_server_fqdn: "https://auth.example.com"
+keycloak_host_port: 8081
+keycloak_admin_user: "admin"
+keycloak_admin_password: "RedHatAnsible_123!"
+
+# OpenRMF Variables
+openrmf_server: "https://openrmf.example.com"
+openrmf_host_port: 9080
+openrmf_keycloak_realm: "openrmf"
+openrmf_username: "openrmf-manager"
+openrmf_firstname: "OpenRMF"
+openrmf_lastname: "Manager"
+openrmf_email: "openrmf-manager@none.com"
+openrmf_password: "RedHatAnsible_123!"
+openrmf_install_dir: "/opt/{{ server_svc_account }}"
+openrmf_zip_file: "OpenRMF-OSS-v1.14.01.zip"
+
+# STIG Manager Variables
+stigman_server_url: "https://stigman.example.com"
+stigman_host_port: 8080
+stigman_keycloak_realm: "stigman"
+stigman_keycloak_client_id: "stig-manager"
+stigman_username: "stigman-manager"
+stigman_firstname: "STIG"
+stigman_lastname: "Manager"
+stigman_email: "stigman-manager@none.com"
+stigman_password: "RedHatAnsible_123!"
+
+# STIG Manager Watcher Variables
+watcher_client_id: "watcher-svc-account"
+watcher_client_email: "watcher@none.com"
+watcher_client_secret: "RedHatAnsible_123!"
+target_collection_id: "3"
+collection_name: "Automated Scan Collection"
+
+# Database Variables
+mysql_root_password: "RedHatAnsible_123!"
+stigman_db_password: "RedHatAnsible_123!"
+keycloak_db_password: "RedHatAnsible_123!"
+
+# NFS Server Variables
+nfs_upload_folder: "/tmp/uploads"
+nfs_user: "stig-svc-account" # making this same as app server for compact install
+nfs_server: "rmf.example.com"
+
+# AAP Internal Variables
+ee_temp_dir: "/tmp/ckls/"
+rmf_temp_dir: "/tmp/ckls/"
+ansible_ssh_extra_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+# Container Images
+mysql_image: "docker.io/library/mysql:8.4"
+keycloak_image: "quay.io/keycloak/keycloak:latest"
+stigman_image: "docker.io/nuwcdivnpt/stig-manager:latest"
+
+...

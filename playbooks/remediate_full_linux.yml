@@ -1,0 +1,76 @@
+---
+- name: Compliance | Linux | Remediate Servers (full) - Supports RHEL 8,9,10
+  hosts: "{{ limit | default('all') }}"
+  gather_facts: false
+
+  pre_tasks:
+    - name: Ensure Ansible remote tmp directory exists on target
+      ansible.builtin.file:
+        path: /opt/ansible
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: '0700'
+      vars:
+        ansible_pipelining: true
+      become: true
+
+  tasks:
+
+  - name: Run fact gathering via stdin due to inability to use /tmp when STIGs are applied 
+    ansible.builtin.setup:
+    vars:
+      ansible_pipelining: true
+
+  - name: "Install Python 3.9 on RHEL 8 hosts so that STIGs work"
+    ansible.builtin.dnf:
+      name: python39
+    become: true
+    when:
+      - ansible_facts['distribution_major_version'] | string == "8"
+
+  - name: "====================================== RHEL Remediation ======================================"
+    block:
+      - name: "---------- Compliance | Remediation | Linux | Remediate RHEL 8 (Full) ----------"
+        ansible.builtin.include_role:
+          name: ../roles/ansible-role-rhel8-stig
+        vars:
+          ansible_python_interpreter: /usr/bin/python3.9
+          ansible_remote_tmp: /opt/ansible
+        when:
+          - ansible_facts['distribution_major_version'] | string == "8"
+
+      - name: "---------- Compliance | Remediation | Linux | Remediate RHEL 9 (Full) ----------"
+        ansible.builtin.include_role:
+          name: ../roles/ansible-role-rhel9-stig
+        vars:
+          ansible_remote_tmp: /opt/ansible
+        when:
+          - ansible_facts['distribution_major_version'] | string == "9"
+
+      - name: "---------- Compliance | Remediation | Linux | Remediate RHEL 10 (Full) ----------"
+        ansible.builtin.include_role:
+          name: ../roles/ansible-role-rhel10-stig
+        vars:
+          ansible_remote_tmp: /opt/ansible
+        when:
+          - ansible_facts['distribution_major_version'] | string == "10"
+
+      - name: Compliance | Remediation | Maintenance | Walk back password expiration for ansible service account since it breaks ansible usage
+        ansible.builtin.user:
+          name: "{{ ansible_service_account }}"
+          password_expire_max: 99999
+          password_expire_min: 0
+
+      - name: Compliance | Remediation | Maintenance | Clear forced password reset flag on next login for ansible service account
+        ansible.builtin.command:
+          cmd: "chage -M 99999 -m 0 -I -1 -E -1 -d 99999 {{ ansible_service_account }}"
+        changed_when: false
+
+    become: true
+    when: ansible_facts['os_family'] == "RedHat"
+
+    # TODO - add other Linux flavors
+
+...
+  

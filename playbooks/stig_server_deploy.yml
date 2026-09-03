@@ -1,0 +1,11 @@
+---
+- name: Deploy STIG Manager & Keycloak Stack via Podman
+  hosts: "{{ server_fqdn | default('rmf.example.com') }}"
+  become: true
+
+  tasks:
+    - name: "---------- Playbook - Deploy the STIG Server ----------"
+      ansible.builtin.include_role:
+        name: ../roles/stig_server_deploy
+
+...

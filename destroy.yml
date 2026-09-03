@@ -1,0 +1,32 @@
+---
+- name: Teardown AAP Environment with STIG Resources
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    platform_state: absent
+
+    controller_configs:
+      - controller_config/projects.yml
+      - controller_config/execution_environments.yml
+      - controller_config/job_templates.yml
+
+  tasks:
+    - name: Load resource variables
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      loop: "{{ controller_configs }}"
+
+    - name: Delete Job Templates
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.controller_job_templates
+
+    - name: Delete Execution Environments
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.controller_execution_environments
+
+    # - name: Delete Projects Last
+    #   ansible.builtin.include_role:
+    #     name: infra.aap_configuration.controller_projects
+
+...

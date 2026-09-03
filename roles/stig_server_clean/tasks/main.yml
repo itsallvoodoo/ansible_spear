@@ -1,0 +1,111 @@
+---
+# tasks file for stig_server_clean
+
+- name: Determine dynamic server IP address
+  ansible.builtin.set_fact:
+    app_server_ip: "{{ ansible_host | default(ansible_default_ipv4.address) }}"
+
+- name: Set dynamic service URL endpoints
+  ansible.builtin.set_fact:
+    auth_server_fqdn: "http://{{ app_server_ip }}:{{ keycloak_host_port }}"
+    stigman_server_url: "http://{{ app_server_ip }}:{{ stigman_host_port }}"
+    openrmf_server: "http://{{ app_server_ip }}:{{ openrmf_host_port }}"
+  when: not (use_fqdn | bool)
+
+# ------------------------------------------------------------------
+# Stop & Disable Systemd Services
+# ------------------------------------------------------------------
+- name: Stop and disable STIG Manager systemd service
+  ansible.builtin.systemd:
+    name: pod-stigman-pod.service
+    state: stopped
+    enabled: false
+  failed_when: false # Continue even if service was not running
+  become: true
+
+- name: Find generated Podman systemd unit files
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns:
+      - "pod-stigman-pod.service"
+      - "container-stigman-app.service"
+      - "container-stigman-db.service"
+      - "container-keycloak-app.service"
+  register: systemd_files
+  become: true
+
+- name: Delete generated systemd service files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ systemd_files.files }}"
+  become: true
+
+- name: Reload systemd daemon to unregister deleted units
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+
+# ------------------------------------------------------------------
+# Purge Podman Pod & Containers
+# ------------------------------------------------------------------
+- name: Force remove STIG Manager Podman pod and all containers
+  containers.podman.podman_pod:
+    name: stigman-pod
+    state: absent
+  become: true
+
+# ------------------------------------------------------------------
+# Clean Up Host Storage & SELinux Contexts
+# ------------------------------------------------------------------
+- name: Remove persistent host storage directory and databases
+  ansible.builtin.file:
+    path: "{{ base_dir }}"
+    state: absent
+  become: true
+
+- name: Remove SELinux file context mapping
+  community.general.sefcontext:
+    target: "{{ base_dir }}(/.*)?"
+    setype: container_file_t
+    state: absent
+  become: true
+
+# ------------------------------------------------------------------
+# Remove Stack Container Images Only
+# ------------------------------------------------------------------
+- name: Remove container images used by STIG Manager stack
+  containers.podman.podman_image:
+    name: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ mysql_image }}"
+    - "{{ keycloak_image }}"
+    - "{{ stigman_image }}"
+  failed_when: false
+  become: true
+
+# ------------------------------------------------------------------
+# Revert Firewall Port Openings
+# ------------------------------------------------------------------
+- name: Close firewall ports for STIG Manager and Keycloak
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    state: disabled
+    immediate: true
+  loop:
+    - "{{ stigman_host_port }}/tcp"
+    - "{{ openrmf_host_port }}/tcp"
+    - "{{ keycloak_host_port }}/tcp"
+  failed_when: false
+  become: true
+
+# ------------------------------------------------------------------
+# Final Verification Message
+# ------------------------------------------------------------------
+- name: Confirm stack removal
+  ansible.builtin.debug:
+    msg: "Teardown complete. Podman pod, containers, images, persistent volumes, systemd units, and firewall rules have been removed from {{ inventory_hostname }}. Packages have not been removed due to possible dependencies."
+
+...

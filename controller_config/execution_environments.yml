@@ -1,0 +1,6 @@
+---
+controller_execution_environments:
+  - name: "Compliance Evaluation EE"
+    image: "quay.io/chobbs-sa/spear_ee:latest" # make this a variable?
+    organization: "Ansible Product Demos (APD)"
+    pull: "always"

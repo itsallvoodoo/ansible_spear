@@ -1,0 +1,12 @@
+---
+
+- name: Upload STIG Scan Files to STIG Manager
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: "---------- Playbook - ALL - Upload files to STIG Manager ----------"
+      ansible.builtin.include_role:
+        name: ../roles/upload_stigman
+
+...

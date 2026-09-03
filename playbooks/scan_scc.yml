@@ -1,0 +1,59 @@
+---
+- name: Compliance | Scanning | Scan servers with Evaluate STIG
+  hosts: "{{ limit | default('all') }}"
+  gather_facts: false
+  become: true
+
+  pre_tasks:
+    - name: Ensure Ansible remote tmp directory exists on target
+      ansible.builtin.file:
+        path: /opt/ansible
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: '0700'
+      vars:
+        ansible_pipelining: true
+      become: true
+
+  tasks:
+
+  - name: Run fact gathering via stdin due to inability to use /tmp when STIGs are applied 
+    ansible.builtin.setup:
+    vars:
+      ansible_pipelining: true
+
+  - name: "---------- Compliance | Scanning | Windows | Evaluate the server using DISA scc ----------"
+    ansible.builtin.include_role:
+      name: ../roles/scc_windows
+    vars:
+      scanned_temp_dir: "C:\\Temp\\evaluate_stig_{{ ansible_facts['date_time']['epoch'] }}"
+    when:
+      - ansible_facts['os_family'] == "Windows"
+
+  - name: "---------- Compliance | Scanning | Linux | Evaluate the server using DISA scc ----------"
+    ansible.builtin.include_role:
+      name: ../roles/scc_linux
+    vars:
+      scanned_temp_dir: "/opt/evaluate_stig_{{ ansible_facts['date_time']['epoch'] }}"
+    #become: true
+    when: ansible_facts['os_family'] == "RedHat"
+
+  - name: "---------- Compliance | Scanning | Cisco | Evaluate the switch using DISA scc----------" # TODO - add cisco scanning
+    ansible.builtin.include_role:
+      name: ../roles/scc_cisco
+    vars:
+      scanned_temp_dir: "/opt/evaluate_stig_{{ ansible_facts['date_time']['epoch'] }}"
+    when:
+      - ansible_facts['os_family'] == "NEVER, UNKNOWN"
+      - false # UNTESTED, BLOCKING
+
+  - name: "---------- Compliance | Storage | Upload the files to OpenRMF ----------"
+    ansible.builtin.include_role:
+      name: ../roles/upload_openrmf
+
+  - name: "---------- Compliance | Storage | Upload files to NFS Server ----------"
+    ansible.builtin.include_role:
+      name: ../roles/upload_nfs
+
+...
