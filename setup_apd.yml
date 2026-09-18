@@ -1,0 +1,60 @@
+---
+- name: Bootstrap AAP Environment with STIG Resources
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - playbooks/group_vars/all.yml
+    
+  vars:
+    controller_configs:
+      - controller_config/projects.yml
+      - controller_config/execution_environments.yml
+      - controller_config/job_templates.yml
+      - controller_config/inventories.yml
+
+  tasks:
+    - name: Load resource variables
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      loop: "{{ controller_configs }}"
+
+    - name: Apply Controller Resources
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.dispatch
+
+    - name: Run APD Multi-demo setup job template for pre-reqs
+      ansible.builtin.debug:
+        msg: TODO - APD | Multi-demo setup
+      # extra vars
+      #     demos:
+      # - cloud
+      # - infrastructure
+      # - linux
+      # - network
+      # - openshift
+      # - windows  
+
+    - name: Run Deploy Cloud Stack in AWS workflow for AWS pre-reqs
+
+    - name: Run Cloud | AWS | Create VM for rmf setup for pre-reqs
+      ansible.builtin.debug:
+        msg: TODO - APD | Multi-demo setup
+      # extra vars
+      # create_vm_aws_region: us-east-2
+      # create_vm_vm_name: rmf.example.com
+      # create_vm_vm_owner: admin
+      # create_vm_vm_deployment: prod
+      # create_vm_vm_purpose: demo
+      # create_vm_vm_environment: Prod
+      # vm_blueprint: rhel9
+      # create_vm_aws_vpc_subnet_name: aws-test-subnet
+      # create_vm_aws_securitygroup_name: aws-test-sg
+      # create_vm_aws_keypair_name: aws-test-key
+      # create_vm_aws_instance_size: m5.2xlarge
+
+    - name: Run inventory refresh on APD Inventory
+      ansible.builtin.debug:
+        msg: TODO - Inventory sync
+        
+...

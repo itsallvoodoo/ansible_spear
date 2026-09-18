@@ -1,0 +1,8 @@
+---
+controller_projects:
+  - name: "STIG & Compliance Automation"
+    organization: "Ansible Product Demos (APD)"
+    scm_type: git
+    scm_url: "https://github.com/itsallvoodoo/ansible_spear"
+    scm_branch: "main"
+    scm_clean: true

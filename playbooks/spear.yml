@@ -1,0 +1,264 @@
+---
+- name: Ansible SPEAR (STIG Policy Evaluation & Automated Remediation)
+  hosts: "{{ limit | default('all') }}"
+  gather_facts: false
+
+  pre_tasks:
+    - name: Ensure Ansible remote tmp directory exists on target
+      ansible.builtin.file:
+        path: /opt/ansible
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: '0700'
+      vars:
+        ansible_pipelining: true
+      become: true
+
+    # - name: Check for Evaluate-STIG ZIP file in Linux repository
+    #   ansible.builtin.stat:
+    #     path: "../roles/evaluate_stig_linux/files/Evaluate-STIG.zip"
+    #   delegate_to: localhost
+    #   run_once: true
+    #   register: linux_zip
+    #   when:
+    #     - evaluate_linux | bool
+
+    # - name: Check for Evaluate-STIG ZIP file in Windows repository
+    #   ansible.builtin.stat:
+    #     path: "../roles/evaluate_stig_windows/files/Evaluate-STIG.zip"
+    #   delegate_to: localhost
+    #   run_once: true
+    #   register: windows_zip
+    #   when:
+    #     - evaluate_windows | bool
+
+    # - name: Check for Evaluate-STIG ZIP file in Cisco repository
+    #   ansible.builtin.stat:
+    #     path: "../roles/evaluate_stig_cisco/files/Evaluate-STIG.zip"
+    #   delegate_to: localhost
+    #   run_once: true
+    #   register: cisco_zip
+    #   when:
+    #     - evaluate_cisco | bool
+    
+    # - name: Ensure required Linux STIG ZIP files exist
+    #   ansible.builtin.assert:
+    #     that:
+    #       - linux_zip.stat.exists
+    #     fail_msg: >-
+    #       WARNING: One or more required 'Evaluate-STIG.zip' files are missing!
+    #       Please manually place 'Evaluate-STIG.zip' into the 'files/' directory 
+    #       of all active evaluation roles before running this playbook.
+    #   delegate_to: localhost
+    #   run_once: true
+    #   when:
+    #     - evaluate_linux | bool
+
+    # - name: Ensure required Windows STIG ZIP files exist
+    #   ansible.builtin.assert:
+    #     that:
+    #       - windows_zip.stat.exists
+    #     fail_msg: >-
+    #       WARNING: One or more required 'Evaluate-STIG.zip' files are missing!
+    #       Please manually place 'Evaluate-STIG.zip' into the 'files/' directory 
+    #       of all active evaluation roles before running this playbook.
+    #   delegate_to: localhost
+    #   run_once: true
+    #   when:
+    #     - evaluate_windows | bool
+
+    # - name: Ensure required Cisco STIG ZIP files exist
+    #   ansible.builtin.assert:
+    #     that:
+    #       - cisco_zip.stat.exists
+    #     fail_msg: >-
+    #       WARNING: One or more required 'Evaluate-STIG.zip' files are missing!
+    #       Please manually place 'Evaluate-STIG.zip' into the 'files/' directory 
+    #       of all active evaluation roles before running this playbook.
+    #   delegate_to: localhost
+    #   run_once: true
+    #   when:
+    #     - evaluate_cisco | bool
+
+  tasks:
+# ------------------------------------------------------------------
+# Setup 
+# ------------------------------------------------------------------
+  - name: Run fact gathering via stdin due to inability to use /tmp when STIGs are applied 
+    ansible.builtin.setup:
+    vars:
+      ansible_pipelining: true
+
+  - name: "Install Python 3.9 on RHEL 8 hosts so that STIGs work"
+    ansible.builtin.dnf:
+      name: python39
+    become: true
+    when:
+      - ansible_facts['distribution_major_version'] | string == "8"
+      - remediate_rhel_light | bool or remediate_rhel_heavy | bool
+  
+# ------------------------------------------------------------------
+# Remediation
+# ------------------------------------------------------------------
+  # - name: "====================================== RHEL Remediation ======================================"
+  #   block:
+      # - name: "---------- Playbook - Linux - Remediate RHEL 7 (lightweight) ----------"
+      #   ansible.builtin.include_role:
+      #     name: ../roles/rhel7STIG_light
+      #   vars:
+      #     ansible_remote_tmp: /opt/ansible
+      #   when:
+      #     - ansible_facts['distribution_major_version'] | string == "7"
+      #     - remediate_rhel_light | bool
+
+      # - name: "---------- Playbook - Linux - Remediate RHEL 8 (lightweight) ----------"
+      #   ansible.builtin.include_role:
+      #     name: ../roles/rhel8STIG_light
+      #   vars:
+      #     ansible_python_interpreter: /usr/bin/python3.9
+      #     ansible_remote_tmp: /opt/ansible
+      #   when:
+      #     - ansible_facts['distribution_major_version'] | string == "8"
+      #     - remediate_rhel_light | bool
+
+      # - name: "---------- Playbook - Linux - Remediate RHEL 9 (lightweight) ----------"
+      #   ansible.builtin.include_role:
+      #     name: ../roles/rhel9STIG_light
+      #   vars:
+      #     ansible_remote_tmp: /opt/ansible
+      #   when:
+      #     - ansible_facts['distribution_major_version'] | string == "9"
+      #     - remediate_rhel_light | bool
+
+    #   - name: "---------- Playbook - Linux - Remediate RHEL 8 (Full) ----------"
+    #     ansible.builtin.include_role:
+    #       name: ../roles/ansible-role-rhel8-stig
+    #     vars:
+    #       ansible_python_interpreter: /usr/bin/python3.9
+    #       ansible_remote_tmp: /opt/ansible
+    #     when:
+    #       - ansible_facts['distribution_major_version'] | string == "8"
+    #       - remediate_rhel_heavy | bool
+
+    #   - name: "---------- Playbook - Linux - Remediate RHEL 9 (Full) ----------"
+    #     ansible.builtin.include_role:
+    #       name: ../roles/ansible-role-rhel9-stig
+    #     vars:
+    #       ansible_remote_tmp: /opt/ansible
+    #     when:
+    #       - ansible_facts['distribution_major_version'] | string == "9"
+    #       - remediate_rhel_heavy | bool
+
+    #   - name: "---------- Playbook - Linux - Remediate RHEL 10 (Full) ----------"
+    #     ansible.builtin.include_role:
+    #       name: ../roles/ansible-role-rhel10-stig
+    #     vars:
+    #       ansible_remote_tmp: /opt/ansible
+    #     when:
+    #       - ansible_facts['distribution_major_version'] | string == "10"
+    #       - remediate_rhel_heavy | bool
+
+    #   - name: Disable password expiration for ansible service account
+    #     ansible.builtin.user:
+    #       name: "{{ ansible_service_account }}"
+    #       password_expire_max: 99999
+    #       password_expire_min: 0
+
+    #   - name: Clear forced password reset flag on next login
+    #     ansible.builtin.command:
+    #       cmd: "chage -M 99999 -m 0 -I -1 -E -1 -d 99999 {{ ansible_service_account }}"
+    #     changed_when: false
+    # become: true
+    # when: ansible_facts['os_family'] == "RedHat"
+
+  # - name: "====================================== Windows Remediation ======================================"
+  #   block:
+  #     - name: "---------- Playbook - Windows - Remediate Windows 11 (Full) ----------"
+  #       ansible.builtin.include_role:
+  #         name: ../roles/Windows-11-STIG
+  #       when:
+  #         - "'Windows 11' in ansible_facts['distribution']"
+  #         - remediate_win11 | bool
+
+  #     - name: "---------- Playbook - Windows - Remediate Windows Server 2022 (Full) ----------"
+  #       ansible.builtin.include_role:
+  #         name: ../roles/win2022STIG
+  #       when:
+  #         - "'2022' in ansible_facts['distribution']"
+  #         - remediate_win11 | bool
+  #   when: ansible_facts['os_family'] == "Windows"
+
+  # ====================== UNTESTED, BLOCKED =============================
+  - name: "---------- Playbook - Cisco - Remediate IOS XE (Full) ----------"
+    ansible.builtin.include_role:
+      name: ../roles/iosxeSTIG
+    when:
+      - ansible_facts['os_family'] == "NEVER"
+      - ansible_facts['distribution_major_version'] == "NEVER"
+      - remediate_iosxe | bool
+      - false # UNTESTED, BLOCKING
+
+# ------------------------------------------------------------------
+# Evaluation
+# ------------------------------------------------------------------
+  # - name: "---------- Playbook - Windows - Evaluate the server using Evaluate-STIG ----------"
+  #   ansible.builtin.include_role:
+  #     name: ../roles/evaluate_stig_windows
+  #   vars:
+  #     scanned_temp_dir: "C:\\Temp\\evaluate_stig_{{ ansible_date_time.epoch }}"
+  #   when:
+  #     - ansible_facts['os_family'] == "Windows"
+  #     - evaluate_windows | bool
+
+  # - name: "---------- Playbook - Linux - Evaluate the server using Evaluate-STIG ----------"
+  #   block:
+  #     - name: "Evaluate RHEL Only"
+  #       ansible.builtin.include_role:
+  #         name: ../roles/evaluate_stig_linux
+  #       vars:
+  #         scanned_temp_dir: "/opt/evaluate_stig_{{ ansible_date_time.epoch }}"
+  #       when:
+  #         - evaluate_linux | bool
+  #   become: true
+  #   when: ansible_facts['os_family'] == "RedHat"
+
+  # - name: "---------- Playbook - Linux - Evaluate the server using SCC ----------"
+  #   block:
+  #     - name: "Evaluate RHEL Only"
+  #       ansible.builtin.include_role:
+  #         name: ../roles/scc_linux # TODO - Change pathing back when it becomes self built
+  #       vars:
+  #         scanned_temp_dir: "/opt/evaluate_stig_{{ ansible_date_time.epoch }}"
+  #       when:
+  #         - evaluate_linux_scc | bool
+  #   become: true
+  #   when: ansible_facts['os_family'] == "RedHat"
+
+
+  # - name: "---------- Playbook - Cisco - Evaluate the switch ----------"
+  #   ansible.builtin.include_role:
+  #     name: ../roles/evaluate_stig_cisco
+  #   vars:
+  #     scanned_temp_dir: "/opt/evaluate_stig_{{ ansible_date_time.epoch }}"
+  #   when:
+  #     - ansible_facts['os_family'] == "NEVER, UNKNOWN"
+  #     - evaluate_cisco | bool
+  #     - false # UNTESTED, BLOCKING
+
+# ------------------------------------------------------------------
+# Upload
+# ------------------------------------------------------------------
+  # - name: "---------- Playbook - ALL - Upload the files to OpenRMF ----------"
+  #   ansible.builtin.include_role:
+  #     name: ../roles/upload_openrmf
+  #   when:
+  #     upload_to_openrmf | bool
+
+  # - name: "---------- Playbook - ALL - Upload files to NFS Server ----------"
+  #   ansible.builtin.include_role:
+  #     name: ../roles/upload_nfs
+  #   when:
+  #     upload_to_nfs | bool
+
+...

@@ -1,0 +1,117 @@
+---
+# tasks file for scc_linux
+
+- name: Create a temporary directory on the remote host
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Check if there is an scc folder already on server
+  ansible.builtin.stat:
+    path: "/opt/scc"
+  register: scc_folder_stat
+
+- name: Copy the scc zip to the remote host
+  ansible.builtin.copy:
+    src: "scc-rhel{{ ansible_facts['distribution_major_version'] }}.zip"
+    dest: "{{ scanned_temp_dir }}/scc-rhel{{ ansible_facts['distribution_major_version'] }}.zip"
+    mode: '0755'
+
+- name: Unzip the scc zip on the remote host
+  ansible.builtin.unarchive:
+    src: "{{ scanned_temp_dir }}/scc-rhel{{ ansible_facts['distribution_major_version'] }}.zip"
+    dest: "{{ scanned_temp_dir }}"
+    mode: '0755'
+    remote_src: true
+
+- name: Locate extracted SCC RPM package file
+  ansible.builtin.find:
+    paths: "{{ scanned_temp_dir }}"
+    patterns: "*.rpm"
+    recurse: true
+  register: scc_rpm_file
+
+- name: Install SCC RPM package in an offline manner
+  ansible.builtin.dnf:
+    name: "{{ scc_rpm_file.files[0].path }}"
+    state: present
+    disable_gpg_check: true
+    disablerepo: "*"
+
+- name: Create the results directory
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}/scc/results"
+    state: directory
+    mode: '0755'
+    
+- name: Execute DISA SCC scan
+  ansible.builtin.command:
+    cmd: "/opt/scc/cscc -u {{ scanned_temp_dir }}/scc/results"
+  changed_when: true
+
+- name: Find generated XCCDF result XML
+  ansible.builtin.find:
+    paths: "{{ scanned_temp_dir }}/scc/results"
+    patterns: "*XCCDF*.xml"
+    recurse: true
+  register: xccdf_files
+
+- name: Find generated CKL file
+  ansible.builtin.find:
+    paths: "{{ scanned_temp_dir }}/scc/results"
+    patterns: "*.ckl"
+    recurse: true
+  register: ckl_files
+
+- name: Find generated CKLB file
+  ansible.builtin.find:
+    paths: "{{ scanned_temp_dir }}/scc/results"
+    patterns: "*.cklb"
+    recurse: true
+  register: cklb_files
+
+- name: Copy each XCCDF file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir }}{{ inventory_hostname }}/{{ item.path | basename }}"
+    flat: true
+  loop: "{{ xccdf_files.files }}"
+  when: "'XCCDF-Results' in item.path"
+
+- name: Copy each CKL file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir }}{{ inventory_hostname }}/{{ item.path | basename }}"
+    flat: true
+  loop: "{{ ckl_files.files }}"
+  when: "'Checklist' in item.path"
+
+- name: Copy each CKLB file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir }}{{ inventory_hostname }}/{{ item.path | basename }}"
+    flat: true
+  loop: "{{ cklb_files.files }}"
+  when: "'Checklist' in item.path"
+
+- name: Uninstall SCC package from target host
+  ansible.builtin.dnf:
+    name:
+      - spawarscc
+      - scc
+    state: absent
+    disablerepo: "*"
+  ignore_errors: true
+
+- name: Clean up the temporary directory on the remote host
+  ansible.builtin.file:
+    path: "{{ scanned_temp_dir }}"
+    state: absent
+
+- name: Clean up the scc directory on the remote host
+  ansible.builtin.file:
+    path: "/opt/scc"
+    state: absent
+
+...
