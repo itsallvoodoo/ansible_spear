@@ -1,0 +1,43 @@
+---
+- name: Compliance | Windows | Remediate Servers (full) - Supports Windows 11, 2022
+  hosts: "{{ limit | default('all') }}"
+  gather_facts: false
+
+  pre_tasks:
+    - name: Ensure Ansible remote tmp directory exists on target
+      ansible.builtin.file:
+        path: /opt/ansible
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: '0700'
+      vars:
+        ansible_pipelining: true
+      become: true
+
+  tasks:
+
+  - name: Run fact gathering via stdin due to inability to use /tmp when STIGs are applied 
+    ansible.builtin.setup:
+    vars:
+      ansible_pipelining: true
+
+  - name: "====================================== Windows Remediation ======================================"
+    block:
+      - name: "---------- Compliance | Remediation | Windows | Remediate Windows 11 (Full) ----------"
+        ansible.builtin.include_role:
+          name: ../roles/Windows-11-STIG
+        when:
+          - "'Windows 11' in ansible_facts['distribution']"
+
+      - name: "---------- Compliance | Remediation | Windows | Remediate Windows Server 2022 (Full) ----------"
+        ansible.builtin.include_role:
+          name: ../roles/win2022STIG
+        when:
+          - "'2022' in ansible_facts['distribution']"
+    when: ansible_facts['os_family'] == "Windows"
+
+    # TODO - add other Windows flavors
+
+...
+  

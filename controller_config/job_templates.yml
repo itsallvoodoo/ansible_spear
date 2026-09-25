@@ -1,0 +1,101 @@
+---
+controller_templates:
+  - name: "Compliance | Setup | Build Compliance Server"
+    description: "Installs STIG Manager, OpenRMF, and Keycloak on target server"
+    playbook: "playbooks/stig_server_deploy.yml"
+    project: "STIG & Compliance Automation"
+    execution_environment: "Compliance Evaluation EE"
+    inventory: "Ansible Product Demos Inventory"
+    limit: "rmf.example.com"
+    ask_limit_on_launch: true
+    credentials:
+      - "{{ default_machine_credential }}"
+      - "{{ default_aws_credential }}"
+    survey_enabled: true
+    survey_spec:
+      name: "Compliance Server Configuration Survey"
+      description: "Define hostnames and endpoints for authentication and management services"
+      spec:
+        - question_name: "Auth Server?"
+          question_description: "Enter the FQDN for the authentication server"
+          variable: "auth_server_fqdn"
+          type: "text"
+          default: "{{ auth_server_fqdn }}"
+          required: true
+
+        - question_name: "OpenRMF Server?"
+          question_description: "Enter the endpoint for OpenRMF"
+          variable: "openrmf_server_fqdn"
+          type: "text"
+          default: "{{ openrmf_server_fqdn }}"
+          required: true
+
+        - question_name: "STIGman Server?"
+          question_description: "Enter the endpoint for STIG Manager"
+          variable: "stigman_server_fqdn"
+          type: "text"
+          default: "{{ stigman_server_fqdn }}"
+          required: true
+
+  - name: "Compliance | Setup | Clean Compliance Server"
+    description: "Removes STIG Manager, OpenRMF, and Keycloak from target server"
+    playbook: "playbooks/stig_server_clean.yml"
+    project: "STIG & Compliance Automation"
+    execution_environment: "Compliance Evaluation EE"
+    inventory: "Ansible Product Demos Inventory"
+    limit: ""
+    ask_limit_on_launch: true
+    credentials:
+      - "{{ default_machine_credential }}"
+
+  - name: "Compliance | Remediation | Remediate Linux Servers (light)"
+    description: "Runs a subset of STIG remediations against Linux hosts"
+    playbook: "playbooks/remediate_light_linux.yml"
+    project: "STIG & Compliance Automation"
+    execution_environment: "Compliance Evaluation EE"
+    inventory: "Ansible Product Demos Inventory"
+    ask_limit_on_launch: true
+    credentials:
+      - "{{ default_machine_credential }}"
+
+  - name: "Compliance | Remediation | Remediate Linux Servers (full)"
+    description: "Runs all STIG remediations against Linux hosts"
+    playbook: "playbooks/remediate_full_linux.yml"
+    project: "STIG & Compliance Automation"
+    execution_environment: "Compliance Evaluation EE"
+    inventory: "Ansible Product Demos Inventory"
+    ask_limit_on_launch: true
+    credentials:
+      - "{{ default_machine_credential }}"
+
+  - name: "Compliance | Remediation | Remediate Windows Servers (full)"
+    description: "Runs all STIG remediations against Windows hosts"
+    playbook: "playbooks/remediate_full_windows.yml"
+    project: "STIG & Compliance Automation"
+    execution_environment: "Compliance Evaluation EE"
+    inventory: "Ansible Product Demos Inventory"
+    ask_limit_on_launch: true
+    credentials:
+      - "{{ default_machine_credential }}"
+
+  - name: "Compliance | Scanning | Scan servers with Evaluate STIG"
+    description: "Scans hosts and generates ckl/cklb/xml files - NEEDS proprietary binary!"
+    playbook: "playbooks/scan_evaluatestig.yml"
+    project: "STIG & Compliance Automation"
+    execution_environment: "Compliance Evaluation EE"
+    inventory: "Ansible Product Demos Inventory"
+    ask_limit_on_launch: true
+    credentials:
+      - "{{ default_machine_credential }}"
+
+  - name: "Compliance | Scanning | Scan servers with DISA SCC"
+    description: "Scans hosts and generates ckl/cklb/xml files with DISA scc"
+    playbook: "playbooks/scan_scc.yml"
+    project: "STIG & Compliance Automation"
+    execution_environment: "Compliance Evaluation EE"
+    inventory: "Ansible Product Demos Inventory"
+    ask_limit_on_launch: true
+    credentials:
+      - "{{ default_machine_credential }}"
+
+...

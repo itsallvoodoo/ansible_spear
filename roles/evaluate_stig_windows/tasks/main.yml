@@ -1,0 +1,94 @@
+---
+# tasks file for evaluate_stig_windows
+
+- name: Create a temporary directory on the remote host
+  ansible.windows.win_file:
+    path: "{{ scanned_temp_dir }}"
+    state: directory
+
+- name: Check for currently installed PowerShell 7 version
+  ansible.windows.win_shell: |
+    if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+        (Get-Command pwsh).FileVersionInfo.FileVersion
+    } else {
+        "0.0.0"
+    }
+  changed_when: false
+  register: installed_ps_version
+
+- name: Ensure no ghost PowerShell 7 processes are running
+  ansible.windows.win_shell: Stop-Process -Name pwsh -Force
+  failed_when: false
+  when: installed_ps_version.stdout | trim is version('7.5.3', '<')
+
+- name: Copy PowerShell 7 MSI to the remote host
+  ansible.builtin.copy:
+    src: /opt/tools/PowerShell-7.5.3-win-x64.msi
+    dest: "{{ scanned_temp_dir }}\\PowerShell-7.5.3-win-x64.msi"
+  when: installed_ps_version.stdout | trim is version('7.5.3', '<')
+
+- name: Install PowerShell 7
+  ansible.windows.win_package:
+    path: "{{ scanned_temp_dir }}\\PowerShell-7.5.3-win-x64.msi"
+    product_id: '{B4D3359E-1191-4BBD-ABDB-0E4A39534981}'
+    state: present
+    arguments: '/qn /norestart'
+  when: installed_ps_version.stdout | trim is version('7.5.3', '<')
+
+- name: Copy the Evaluate-STIG.zip to the remote host
+  ansible.builtin.copy:
+    src: /opt/tools/Evaluate-STIG.zip
+    dest: "{{ scanned_temp_dir }}/Evaluate-STIG.zip"
+    mode: '0755'
+
+- name: Unarchive the Evaluate-STIG.zip file
+  community.windows.win_unzip:
+    src: "{{ scanned_temp_dir }}\\Evaluate-STIG.zip"
+    dest: "{{ scanned_temp_dir }}"
+    rm: true
+
+- name: Create the results directory
+  ansible.windows.win_file:
+    path: "{{ scanned_temp_dir }}\\Evaluate-STIG\\Results"
+    state: directory
+
+- name: Run the Evaluate-STIG PowerShell script and sleep it in AAP
+  ansible.windows.win_powershell:
+    script: |
+      Set-Location -Path {{ scanned_temp_dir }}\Evaluate-STIG
+      .\\Evaluate-STIG.ps1 -SelectSTIG Win11 -Output CKL,CKLB,XCCDF -OutputPath {{ scanned_temp_dir }}\\Evaluate-STIG\\Results
+    executable: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
+  async: 2700
+  poll: 0
+  register: task_sleep
+
+- name: Check on bash script to see if it has completed
+  ansible.builtin.async_status:
+    jid: "{{ task_sleep.ansible_job_id }}"
+  register: job_result
+  until: job_result.finished | bool
+  retries: 44
+  delay: 60
+
+- name: Find all checklist files in Results directories
+  ansible.windows.win_find:
+    paths: "{{ scanned_temp_dir }}\\Evaluate-STIG\\Results"
+    patterns: "*"
+    recurse: yes
+    file_type: file
+  register: checklist_files
+
+- name: Copy each checklist file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir }}{{ inventory_hostname }}/{{ item.path | basename }}"
+    flat: true
+  loop: "{{ checklist_files.files }}"
+  when: "'Checklist' in item.path"
+
+- name: Clean up the temporary directory on the remote host
+  ansible.windows.win_file:
+    path: "{{ scanned_temp_dir }}"
+    state: absent
+
+...

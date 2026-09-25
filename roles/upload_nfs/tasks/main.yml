@@ -1,0 +1,40 @@
+---
+# tasks file for upload_nfs
+
+- name: Find checklists previously fetched to the EE
+  ansible.builtin.find:
+    paths: "{{ ee_temp_dir }}{{ inventory_hostname }}/"
+    patterns:
+      - "*.xml"
+      - "*.ckl"
+      - "*.cklb"
+    recurse: false
+  register: ee_checklists
+  delegate_to: localhost
+
+- name: NFS Upload Functions
+  delegate_to: "{{ nfs_server }}"
+  vars:
+    ansible_remote_tmp: /tmp
+  block:
+
+    - name: Ensure that storage path exists on NFS
+      ansible.builtin.file:
+        path: "{{ nfs_upload_folder }}/{{ inventory_hostname }}"
+        state: directory
+        owner: "{{ nfs_user }}"
+        group: "{{ nfs_user }}"
+        mode: '0750'
+
+    - name: Push CKLs to NFS Server
+      ansible.builtin.copy:
+        src: "{{ item.path }}" 
+        dest: '{{ nfs_upload_folder }}/{{ inventory_hostname }}/{{ item.path | win_basename }}'
+        owner: "{{ nfs_user }}"
+        group: "{{ nfs_user }}"
+        mode: '0640'
+      loop: "{{ ee_checklists.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+...
