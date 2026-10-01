@@ -1,0 +1,87 @@
+---
+- name: Compliance | Setup | Gather Facts and Classify Hosts
+  hosts: "{{ limit | default('all') }}"
+  gather_facts: false
+
+  tasks:
+    - name: Run fact gathering on endpoints (Linux/Windows)
+      ansible.builtin.setup:
+      vars:
+        ansible_pipelining: true
+      ignore_errors: true
+
+    - name: Create dynamic groups based on OS family
+      ansible.builtin.group_by:
+        key: "os_family_{{ ansible_facts['os_family'] }}"
+      when: ansible_facts['os_family'] is defined
+
+    - name: Group Cisco network devices
+      ansible.builtin.group_by:
+        key: "os_cisco"
+      when: ansible_network_os is defined and 'cisco' in ansible_network_os
+
+- name: Compliance | Scanning | Scan Linux servers with DISA STIG Compliance Checker
+  hosts: "all:!os_family_Windows:!os_cisco:&{{ limit | default('all') }}"
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Ensure Python 3.9 is installed on target host
+      ansible.builtin.raw: dnf install -y python39
+      changed_when: false
+
+    - name: Ensure Ansible remote tmp directory exists on target for Linux servers
+      ansible.builtin.file:
+        path: /opt/ansible
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0700'
+      vars:
+        ansible_pipelining: true
+
+    - name: "---------- Compliance | Scanning | Linux | Evaluate the server using DISA scc ----------"
+      ansible.builtin.include_role:
+        name: ../roles/scc_linux
+      vars:
+        scanned_temp_dir: "/opt/evaluate_stig_{{ ansible_facts['date_time']['epoch'] }}"
+
+- name: Compliance | Scanning | Scan Windows servers with DISA STIG Compliance Checker
+  hosts: "os_family_Windows:&{{ limit | default('all') }}"
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: "---------- Compliance | Scanning | Windows | Evaluate the server using DISA scc ----------"
+      ansible.builtin.include_role:
+        name: ../roles/scc_windows
+      vars:
+        scanned_temp_dir: "C:\\Temp\\evaluate_stig_{{ ansible_facts['date_time']['epoch'] }}"
+
+- name: Compliance | Scanning | Scan networking equipment with DISA STIG Compliance Checker
+  hosts: "os_cisco:&{{ limit | default('all') }}"
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: "---------- Compliance | Scanning | Cisco | Evaluate the switch using DISA scc ----------"
+      ansible.builtin.include_role:
+        name: ../roles/scc_cisco
+      vars:
+        scanned_temp_dir: "/opt/evaluate_stig_{{ lookup('pipe', 'date +%s') }}"
+      when: false # UNTESTED, BLOCKING
+
+- name: Compliance | Post Work | Upload all results to reporting tools
+  hosts: "{{ limit | default('all') }}"
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: "---------- Compliance | Storage | Upload the files to OpenRMF ----------"
+      ansible.builtin.include_role:
+        name: ../roles/upload_openrmf
+
+    - name: "---------- Compliance | Storage | Upload files to NFS Server ----------"
+      ansible.builtin.include_role:
+        name: ../roles/upload_nfs
+...

@@ -1,0 +1,150 @@
+---
+- name: Bootstrap AAP Environment with STIG Resources
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - playbooks/group_vars/all.yml
+    
+  vars:
+    controller_configs:
+      - controller_config/projects.yml
+      - controller_config/execution_environments.yml
+      - controller_config/job_templates.yml
+      - controller_config/inventories.yml
+
+  tasks:
+    - name: Load resource variables
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      loop: "{{ controller_configs }}"
+
+    - name: Apply Controller Resources
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.dispatch
+
+    - name: Run APD Multi-demo setup job template for pre-reqs
+      ansible.controller.job_launch:
+        job_template: "APD | Multi-demo setup"
+        wait: true
+        extra_vars:
+          demos:
+            - cloud
+            - linux
+            - openshift
+            - windows
+            # - infrastructure
+            # - network
+
+    - name: Deploy Cloud Stack in AWS for pre-reqs
+      ansible.controller.workflow_launch:
+        name: "Deploy Cloud Stack in AWS"
+        wait: true
+        extra_vars:
+          create_vm_aws_region: us-east-2
+          create_vm_aws_owner_tag: admin
+          vm_environment: Prod
+          email: your_name@acme.org
+          aws_key_name: aws-test-key
+          create_vm_aws_keypair_name: aws-test-key
+          create_vm_aws_securitygroup_name: aws-test-sg
+          create_vm_aws_vpc_subnet_name: aws-test-subnet
+          create_vm_vm_deployment: cloud_stack
+          create_vm_vm_purpose: demo
+          create_vm_apd_managed_by: "{{ vm_apd_managed_by }}" 
+          create_vm_apd_demo_tag: "{{ vm_apd_demo_tag }}"
+
+    - name: Run Cloud | AWS | Create VM for rmf setup for pre-reqs
+      ansible.controller.job_launch:
+        job_template: "Cloud | AWS | Create VM"
+        wait: true
+        extra_vars:
+          create_vm_aws_region: "{{ aws_region }}"
+          create_vm_vm_name: "{{ app_server_name }}" 
+          create_vm_vm_owner: "{{ vm_owner }}"
+          create_vm_vm_deployment: "{{ vm_deployment }}"
+          create_vm_vm_purpose: "{{ vm_purpose }}"
+          create_vm_vm_environment: "{{ vm_environment }}"
+          vm_blueprint: rhel9
+          create_vm_aws_vpc_subnet_name: aws-test-subnet
+          create_vm_aws_securitygroup_name: aws-test-sg
+          create_vm_aws_keypair_name: aws-test-key
+          create_vm_aws_instance_size: m5.2xlarge
+          create_vm_aws_volume_size: 100
+          create_vm_aws_root_volume_size: 100
+          create_vm_aws_disk_size: 100
+
+    - name: Run inventory refresh on APD Inventory
+      ansible.controller.inventory_source_update:
+        name: "AWS Inventory"
+        inventory: "Ansible Product Demos Inventory"
+        organization: "Ansible Product Demos (APD)"
+        wait: true
+
+    - name: Fetch target VM info
+      amazon.aws.ec2_instance_info:
+        filters:
+          "tag:Name": "{{ app_server_name }}"
+          "tag:blueprint": "{{ create_vm_vm_blueprint | default('rhel9') }}"
+          "tag:environment": "{{ vm_environment }}"
+          "tag:deployment": "{{ vm_deployment }}"
+          "tag:owner": "{{ vm_owner }}"
+          "tag:purpose": "{{ vm_purpose }}"
+          "tag:ansible-role": create_vm
+          "tag:ansible-collection": demo.cloud
+          "tag:managed-by": "{{ vm_apd_managed_by }}"
+          "tag:apd": "{{ vm_apd_demo_tag }}"
+          instance-state-name:
+            - pending
+            - running
+            - shutting-down
+            - stopping
+            - stopped
+        region: "{{ aws_region }}"
+      register: create_vm_existing_vm
+
+    - name: "Expand {{ app_server_name }} root volume to 100GB"
+      amazon.aws.ec2_vol:
+        region: "{{ aws_region | default('us-east-2') }}"
+        id: "{{ create_vm_existing_vm.instances[0].block_device_mappings[0].ebs.volume_id }}"
+        instance: "{{ create_vm_existing_vm.instances[0].instance_id }}"
+        volume_size: 100
+        modify_volume: true
+      delegate_to: localhost
+      
+    - name: Register target VM in temporary play group
+      ansible.builtin.add_host:
+        name: "{{ create_vm_existing_vm.instances[0].public_ip_address }}"
+        groups: dynamic_app_server
+        ansible_user: "ec2-user" # Change to cloud-user or redhat if required by your AMI
+    
+    - name: AAP | Update RMF server host IP in AAP Inventory
+      ansible.controller.host:
+        name: "{{ app_server_name }}"
+        inventory: "{{ aap_inventory }}"
+        variables:
+          ansible_host: "{{ create_vm_existing_vm.instances[0].public_ip_address }}"
+        state: present
+      delegate_to: localhost
+      become: false
+      when: not apd_deployment
+
+- name: Expand Root Filesystem on Target Host
+  hosts: dynamic_app_server
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Wait for SSH connection to be ready
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Grow partition and filesystem on target host
+      ansible.builtin.shell: |
+        ROOT_DEV=$(findmnt -n -o SOURCE /)
+        DISK=$(echo "$ROOT_DEV" | sed -E 's/p?[0-9]+$//')
+        PART=$(echo "$ROOT_DEV" | grep -o '[0-9]*$')
+        growpart "$DISK" "$PART" || true
+        xfs_growfs / || resize2fs "$ROOT_DEV"
+  
+...
