@@ -1,0 +1,24 @@
+---
+version: 3
+
+dependencies:
+  python_interpreter:
+    package_system: python312
+    python_path: /usr/bin/python3.12
+  ansible_runner:
+    package_pip: ansible-runner
+  galaxy: requirements.yml
+  python: requirements.txt
+  system: bindep.txt
+
+images:
+  base_image:
+    name: aap.itsallvoodoo.com/ee-supported-rhel9:latest
+
+options:
+  package_manager_path: /usr/bin/microdnf
+
+additional_build_steps:
+  append_final:
+    - RUN mkdir -p /tmp/ckls
+    - RUN microdnf install -y unzip
