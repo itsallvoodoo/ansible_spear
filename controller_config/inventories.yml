@@ -1,0 +1,4 @@
+---
+controller_inventories:
+  - name: Ansible Product Demos Inventory
+    organization: "{{ aap_organization }}"
