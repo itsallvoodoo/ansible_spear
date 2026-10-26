@@ -1,0 +1,37 @@
+galaxy_info:
+  role_name: rhel9_stig
+  author: ComplianceAsCode development team
+  description: DISA STIG for Red Hat Enterprise Linux 9
+
+  issue_tracker_url: https://github.com/ComplianceAsCode/content/issues
+
+  license: BSD-3-Clause
+
+  min_ansible_version: 2.9
+
+  platforms:
+  - name: EL
+    versions:
+    - 9
+
+  galaxy_tags:
+  - system
+  - hardening
+  - openscap
+  - ssg
+  - scap
+  - security
+  - compliance
+  - complianceascode
+  - redhatofficial
+  - redhat
+  - rhel9
+  - stig
+  - disa
+
+
+collections:
+  - community.general
+  - ansible.posix
+
+dependencies: []

@@ -1,0 +1,131 @@
+---
+# tasks file for scc_windows
+
+- name: Create a temporary directory on the remote host
+  ansible.windows.win_file:
+    path: "{{ scanned_temp_dir }}"
+    state: directory
+
+- name: Copy the SCC zip package to the remote host
+  ansible.windows.win_copy:
+    src: "scc-{{ scc_version | default('5.15') }}_Windows_bundle.zip"
+    dest: "{{ scanned_temp_dir }}\\scc_windows.zip"
+
+- name: Unzip the SCC package on the remote host
+  community.windows.win_unzip:
+    src: "{{ scanned_temp_dir }}\\scc_windows.zip"
+    dest: "{{ scanned_temp_dir }}\\stage1"
+    delete_archive: false
+
+- name: Locate inner SCC zip package
+  ansible.windows.win_find:
+    paths: "{{ scanned_temp_dir }}\\stage1"
+    patterns: "*.zip"
+    recurse: true
+  register: inner_zip_file
+
+- name: Verify inner zip package was found
+  ansible.builtin.fail:
+    msg: "Failed to locate inner zip package inside {{ scanned_temp_dir }}\\stage1"
+  when: inner_zip_file.matched == 0
+
+- name: Extract inner SCC zip package
+  community.windows.win_unzip:
+    src: "{{ inner_zip_file.files[0].path }}"
+    dest: "{{ scanned_temp_dir }}\\scc_app"
+    delete_archive: false
+
+- name: Locate cscc.exe executable file
+  ansible.windows.win_find:
+    paths: "{{ scanned_temp_dir }}\\scc_app"
+    patterns: "*cscc.exe*"
+    recurse: true
+  register: cscc_executable
+
+- name: Verify cscc.exe was located
+  ansible.builtin.fail:
+    msg: "Could not locate cscc.exe inside {{ scanned_temp_dir }}\\scc_app. Verify that the ZIP files extracted successfully."
+  when: cscc_executable.matched == 0
+
+- name: Set CSCC path facts
+  ansible.builtin.set_fact:
+    cscc_path: "{{ cscc_executable.files[0].path }}"
+    cscc_dir: "{{ cscc_executable.files[0].path | win_dirname }}"
+
+- name: Create the results directory
+  ansible.windows.win_file:
+    path: "{{ scanned_temp_dir }}\\results"
+    state: directory
+
+- name: Execute DISA SCC scan
+  ansible.windows.win_command:
+    cmd: "{{ cscc_path }} -u {{ scanned_temp_dir }}\\results"
+    chdir: "{{ cscc_dir }}"
+  changed_when: true
+
+- name: Find generated XCCDF result XML
+  ansible.windows.win_find:
+    paths: "{{ scanned_temp_dir }}\\results"
+    patterns: "*XCCDF*.xml"
+    recurse: true
+  register: xccdf_files
+
+- name: Find generated CKL file
+  ansible.windows.win_find:
+    paths: "{{ scanned_temp_dir }}\\results"
+    patterns: "*.ckl"
+    recurse: true
+  register: ckl_files
+
+- name: Find generated CKLB file
+  ansible.windows.win_find:
+    paths: "{{ scanned_temp_dir }}\\results"
+    patterns: "*.cklb"
+    recurse: true
+  register: cklb_files
+
+- name: Create temporary directory in EE for local results
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: ckls_
+  delegate_to: localhost
+  become: false
+  register: ee_temp_dir
+
+- name: Ensure host directory exists in EE temp folder
+  ansible.builtin.file:
+    path: "{{ ee_temp_dir.path }}/{{ inventory_hostname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Copy each XCCDF file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir.path }}/{{ inventory_hostname }}/{{ item.path | win_basename }}"
+    flat: true
+  loop: "{{ xccdf_files.files }}"
+  when: "'XCCDF-Results' in item.path"
+
+- name: Copy each CKL file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir.path }}/{{ inventory_hostname }}/{{ item.path | win_basename }}"
+    flat: true
+  loop: "{{ ckl_files.files }}"
+  when: "'Checklist' in item.path"
+
+- name: Copy each CKLB file back to the EE
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ee_temp_dir.path }}/{{ inventory_hostname }}/{{ item.path | win_basename }}"
+    flat: true
+  loop: "{{ cklb_files.files }}"
+  when: "'Checklist' in item.path"
+
+- name: Clean up the temporary directory on the remote host
+  ansible.windows.win_file:
+    path: "{{ scanned_temp_dir }}"
+    state: absent
+...
