@@ -534,7 +534,7 @@
 # Provision Users & Roles in Keycloak
 # ------------------------------------------------------------------
 - name: OPENRMF | Ensure OpenRMF Admin User exists in Keycloak
-  community.general.keycloak_user:
+  middleware_automation.keycloak.keycloak_user:
     auth_keycloak_url: "http://127.0.0.1:{{ keycloak_internal_port }}"
     auth_realm: "master"
     auth_username: "{{ keycloak_admin_user }}"
@@ -554,7 +554,7 @@
     - openrmf
 
 - name: STIGMAN | Ensure STIG Manager Admin User exists in Keycloak
-  community.general.keycloak_user:
+  middleware_automation.keycloak.keycloak_user:
     auth_keycloak_url: "http://127.0.0.1:{{ keycloak_internal_port }}"
     auth_realm: "master"
     auth_username: "{{ keycloak_admin_user }}"
@@ -574,7 +574,7 @@
     - stigman
 
 - name: OPENRMF | Assign Realm Roles to OpenRMF User
-  community.general.keycloak_user_rolemapping:
+  middleware_automation.keycloak.keycloak_user_rolemapping:
     auth_keycloak_url: "http://127.0.0.1:{{ keycloak_internal_port }}"
     auth_realm: "master"
     auth_username: "{{ keycloak_admin_user }}"
@@ -593,7 +593,7 @@
     - openrmf
 
 - name: STIGMAN | Assign Realm Roles to STIG Manager User
-  community.general.keycloak_user_rolemapping:
+  middleware_automation.keycloak.keycloak_user_rolemapping:
     auth_keycloak_url: "http://127.0.0.1:{{ keycloak_internal_port }}"
     auth_realm: "master"
     auth_username: "{{ keycloak_admin_user }}"
