@@ -1,0 +1,30 @@
+---
+collections:
+  - name: cisco.ios
+  - name: ansible.windows
+    version: ">=3.6.0"
+  - name: community.general
+  - name: middleware_automation.keycloak
+    version: ">=3.1.0"
+  - name: community.windows
+    version: ">=3.1.0"
+  - name: microsoft.ad
+    version: ">=1.4.0"
+  - name: chocolatey.chocolatey
+    version: ">=1.5.1"
+  - name: ansible.posix
+    version: ">=2.2.2"
+  - name: containers.podman
+    version: ">=1.20.2"
+  - name: infra.aap_configuration
+  - name: amazon.aws
+    version: ">=11.3.0"
+  - name: kubernetes.core
+  - name: vmware.vmware
+    version: ">=2.8.0"
+  - name: paloaltonetworks.panos
+    version: ">=3.3.0"
+  - name: f5networks.f5_bigip
+    version: ">=3.14.0"
+  - name: dellemc.powerflex
+    version: ">=3.0.0"

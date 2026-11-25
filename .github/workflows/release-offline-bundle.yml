@@ -1,0 +1,85 @@
+name: Build Offline Release Bundle
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    if: startsWith(github.event.head_commit.message, 'release:') || startsWith(github.event.head_commit.message, 'Release:')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository with full Git history
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Ensure all LFS binary objects are downloaded into cache
+        run: |
+          git lfs fetch --all
+          git lfs pull
+
+      - name: Parse Tag and Description from Commit Message
+        id: parse
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1)
+
+          # Extract tag: matches string between 'release:' and ' - '
+          TAG=$(echo "$FIRST_LINE" | sed -nE 's/^[Rr]elease:[[:space:]]*([a-zA-Z0-9._-]+).*/\1/p')
+
+          # Extract description: matches everything after ' - '
+          DESC=$(echo "$FIRST_LINE" | sed -nE 's/^[Rr]elease:[[:space:]]*[a-zA-Z0-9._-]+[[:space:]]*-[[:space:]]*(.*)/\1/p')
+
+          # Fallbacks if format variations occur
+          if [ -z "$TAG" ]; then
+            TAG="v$(date +'%Y.%m.%d-%H%M%S')"
+          fi
+          if [ -z "$DESC" ]; then
+            DESC="Offline Release $TAG"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "desc=$DESC" >> "$GITHUB_OUTPUT"
+          echo "Extracted Tag: $TAG"
+          echo "Extracted Description: $DESC"
+
+      - name: Create Git Mirror Bundle
+        run: |
+          zip -r spear-git-mirror-${{ steps.parse.outputs.tag }}.zip . \
+            -x ".github/*"
+
+      - name: Create GitHub Release and Upload Bundle
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.parse.outputs.tag }}
+          name: ${{ steps.parse.outputs.tag }} - ${{ steps.parse.outputs.desc }}
+          body: |
+            ### ${{ steps.parse.outputs.desc }}
+
+            This archive contains the full Git repository, commit history, and the populated `.git/lfs/objects/` store.
+
+            #### Instructions for Disconnected Environments:
+            1. Transfer and extract the ZIP:
+               ```bash
+               unzip spear-git-mirror-${{ steps.parse.outputs.tag }}.zip -d spear
+               cd spear
+               ```
+            2. Re-point origin to the internal repository:
+               ```bash
+               git remote set-url origin <internal-repo-url>
+               ```
+            3. Push LFS payloads and Git references:
+               ```bash
+               git lfs push origin main --all
+               git push origin main
+               ```
+          files: spear-git-mirror-${{ steps.parse.outputs.tag }}.zip
+          generate_release_notes: false
